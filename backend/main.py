@@ -4,7 +4,7 @@ import numpy as np
 from fastapi import FastAPI
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
-
+import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
