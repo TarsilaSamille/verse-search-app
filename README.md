@@ -1,6 +1,6 @@
-
+cd frontend
 source venv/bin/activate 
-uvicorn backend.main:app --reload
+uvicorn .main:app --reload
 
 
 cd frontend
