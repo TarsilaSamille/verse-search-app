@@ -7,10 +7,13 @@ function App() {
 
   const search = async () => {
     if (!query) return;
-    const response = await axios.post("http://127.0.0.1:8000/search/", {
-      text: query,
-      top_k: 5,
-    });
+    const response = await axios.post(
+      `${process.env.REACT_APP_API_URL}/search/`,
+      {
+        text: query,
+        top_k: 5,
+      }
+    );
     setResults(response.data.results);
   };
 
