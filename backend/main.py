@@ -58,3 +58,6 @@ def find_similar_verse(query: Query):
     return {"query": query.text, "results": results}
 
 # Run server: uvicorn backend.main:app --reload
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))  # Usa a porta do Render, padrão 8000 se não definida
+    uvicorn.run(app, host="0.0.0.0", port=port)
