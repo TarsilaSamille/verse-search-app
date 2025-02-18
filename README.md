@@ -1,4 +1,5 @@
-cd frontend
+cd backend
+python3 -m venv
 source venv/bin/activate 
 uvicorn .main:app --reload
 
