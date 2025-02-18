@@ -19,7 +19,7 @@ app.add_middleware(
 )
 
 # Load JSON data
-json_file = "backend/jagoy-english.json"
+json_file = "jagoy-english.json"
 
 with open(json_file, "r", encoding="utf-8") as f:
     data = json.load(f)
