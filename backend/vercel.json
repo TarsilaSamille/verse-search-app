@@ -1,6 +1,6 @@
 {
   "functions": {
-    "api/search": {
+    "api/search.py": {
       "runtime": "vercel-python@0.5.0"
     }
   }
