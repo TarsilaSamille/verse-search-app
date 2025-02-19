@@ -1,7 +1,3 @@
 {
-  "functions": {
-    "api/search.py": {
-      "runtime": "@vercel/python@3.9"
-    }
-  }
+  "redirects": [{ "source": "/", "destination": "/api" }]
 }
