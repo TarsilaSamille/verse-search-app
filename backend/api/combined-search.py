@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -11,6 +12,11 @@ import tensorflow_hub as hub
 from typing import List, Dict
 
 app = FastAPI()
+
+# Health check endpoint
+@app.get("/health")
+def health_check():
+    return {"status": "healthy", "port": os.environ.get("PORT")}
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +32,12 @@ app.add_middleware(
 )
 
 # Load Universal Sentence Encoder model
-model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
+try:
+    model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
+    logger.info("Universal Sentence Encoder model loaded successfully.")
+except Exception as e:
+    logger.error(f"Error loading Universal Sentence Encoder model: {e}")
+    raise HTTPException(status_code=500, detail="Failed to load the model")
 
 # Dataset configuration
 DATASET_BASE_URL = "https://datasets-server.huggingface.co/rows?dataset=tarsssss%2Ftranslation-bj-en&config=default&split=train"
@@ -55,6 +66,7 @@ def load_dataset() -> List[Dict]:
                 break
                 
         logger.info(f"Loaded {len(dataset)} entries from dataset")
+        print(f"Dataset length: {len(dataset)}")  # Print the length of the dataset
         return dataset
         
     except Exception as e:
@@ -146,4 +158,11 @@ def combined_search(request: CombinedSearchRequest) -> Dict:
         raise HTTPException(status_code=500, detail="Search failed")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=port,
+        reload=False,
+        access_log=False
+    )

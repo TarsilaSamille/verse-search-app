@@ -9,6 +9,7 @@ import faiss
 from sklearn.preprocessing import normalize
 import logging
 import tensorflow_hub as hub
+from typing import List, Dict
 
 app = FastAPI()
 
@@ -31,7 +32,12 @@ app.add_middleware(
 )
 
 # Load Universal Sentence Encoder model
-model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
+try:
+    model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
+    logger.info("Universal Sentence Encoder model loaded successfully.")
+except Exception as e:
+    logger.error(f"Error loading Universal Sentence Encoder model: {e}")
+    raise HTTPException(status_code=500, detail="Failed to load the model")
 
 # Dataset configuration
 DATASET_BASE_URL = "https://datasets-server.huggingface.co/rows?dataset=tarsssss%2Ftranslation-bj-en&config=default&split=train"
@@ -60,6 +66,7 @@ def load_dataset() -> List[Dict]:
                 break
                 
         logger.info(f"Loaded {len(dataset)} entries from dataset")
+        print(f"Dataset length: {len(dataset)}")  # Print the length of the dataset
         return dataset
         
     except Exception as e:
