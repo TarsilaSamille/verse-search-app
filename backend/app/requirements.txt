@@ -6,3 +6,4 @@ scikit-learn
 tensorflow-hub
 numpy
 pydantic
+tensorflow
