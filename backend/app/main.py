@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -8,9 +9,13 @@ import faiss
 from sklearn.preprocessing import normalize
 import logging
 import tensorflow_hub as hub
-from typing import List, Dict
 
 app = FastAPI()
+
+# Health check endpoint
+@app.get("/health")
+def health_check():
+    return {"status": "healthy", "port": os.environ.get("PORT")}
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -146,4 +151,11 @@ def combined_search(request: CombinedSearchRequest) -> Dict:
         raise HTTPException(status_code=500, detail="Search failed")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=port,
+        reload=False,
+        access_log=False
+    )
