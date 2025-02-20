@@ -1,63 +1,107 @@
-import json
-import faiss
-import numpy as np
-from fastapi import FastAPI
-from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer
-import uvicorn
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import numpy as np
+import uvicorn
+import requests
+import faiss
+from sklearn.preprocessing import normalize
+import logging
+import tensorflow_hub as hub
 
 app = FastAPI()
 
-# Permitir requisições de qualquer origem (ajuste conforme necessário)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Pode restringir a origem específica do frontend, ex: ["http://localhost:3000"]
+    allow_origins=["http://localhost:3000"],  # Allow frontend to access backend
     allow_credentials=True,
-    allow_methods=["*"],  # Permite todos os métodos (GET, POST, OPTIONS, etc.)
-    allow_headers=["*"],  # Permite todos os headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Load JSON data
-json_file = "jagoy-english.json"
+# Load Universal Sentence Encoder model
+model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
 
-with open(json_file, "r", encoding="utf-8") as f:
-    data = json.load(f)
+# Load dataset
+DATASET_URL = "https://datasets-server.huggingface.co/rows?dataset=tarsssss%2Ftranslation-bj-en&config=default&split=train&offset=0&length=100"
 
-# Extract texts and translations
-english_texts = [entry["translation"]["en"] for entry in data]
-bj_translations = {entry["translation"]["en"]: entry["translation"]["bj"] for entry in data}
+def load_dataset():
+    try:
+        response = requests.get(DATASET_URL)
+        response.raise_for_status()
+        dataset = response.json()["rows"]
+        return dataset
+    except Exception as e:
+        logger.error(f"Error loading dataset: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load dataset")
 
-# Load sentence transformer model
-model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+# Load dataset and preprocess embeddings
+dataset = load_dataset()
+dataset_texts = [entry["row"]["text"] for entry in dataset]
+dataset_embeddings = np.array([entry["row"]["embedding"] for entry in dataset], dtype=np.float32)
+dataset_embeddings = normalize(dataset_embeddings, norm='l2', axis=1)
 
-# Encode sentences into embeddings
-embeddings = np.array(model.encode(english_texts, convert_to_numpy=True), dtype=np.float32)
-
-# Create FAISS index
-d = embeddings.shape[1]
+# Initialize FAISS index
+d = dataset_embeddings.shape[1]
 index = faiss.IndexFlatL2(d)
-index.add(embeddings)
+index.add(dataset_embeddings)
 
-# FastAPI app
-class Query(BaseModel):
-    text: str
-    top_k: int = 5
+class CombinedSearchRequest(BaseModel):
+    query: str
 
-@app.post("/search/")
-def find_similar_verse(query: Query):
-    query_embedding = np.array(model.encode([query.text], convert_to_numpy=True), dtype=np.float32)
-    distances, indices = index.search(query_embedding, query.top_k)
+@app.post("/combined-search")
+def combined_search(request: CombinedSearchRequest):
+    try:
+        query = request.query.lower()  # Convert query to lowercase for case-insensitive search
+        results = []
 
-    results = []
-    for d, idx in zip(distances[0], indices[0]):
-        en_text = english_texts[idx]
-        bj_text = bj_translations.get(en_text, "No translation available")
-        results.append({"english": en_text, "bj_translation": bj_text, "similarity": round(1 - d, 4)})
+        # 1. Text Search: Find phrases containing the query word
+        text_results = []
+        for entry in dataset:
+            text = entry["row"]["text"].lower()
+            if query in text:
+                text_results.append({
+                    "english": entry["row"]["text"],
+                    "bj_translation": entry["row"]["bj_translation"],
+                    "type": "text_match"  # Indicate that this is a text match
+                })
 
-    return {"query": query.text, "results": results}
+        # 2. Semantic Search: Find semantically similar phrases
+        query_embedding = model([query]).numpy()  # Generate query embedding
+        query_embedding = normalize(query_embedding, norm='l2', axis=1)
+        distances, indices = index.search(query_embedding, 10)  # Top 10 results
 
-# Run server: uvicorn backend.main:app --reload
+        semantic_results = []
+        for i in range(len(indices[0])):
+            entry = dataset[indices[0][i]]["row"]
+            cosine_similarity = 1 - distances[0][i] / 2  # Convert L2 distance to cosine similarity
+            semantic_results.append({
+                "english": entry["text"],
+                "bj_translation": entry["bj_translation"],
+                "similarity": cosine_similarity,
+                "type": "semantic_match"  # Indicate that this is a semantic match
+            })
+
+        # Combine results, prioritizing text matches
+        results = text_results + semantic_results
+
+        # Remove duplicates (if a phrase appears in both text and semantic results)
+        unique_results = []
+        seen_texts = set()
+        for result in results:
+            if result["english"] not in seen_texts:
+                seen_texts.add(result["english"])
+                unique_results.append(result)
+
+        return {"results": unique_results}
+    except Exception as e:
+        logger.error(f"Error during combined search: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))  # Usa a porta do Render, padrão 8000 se não definida
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

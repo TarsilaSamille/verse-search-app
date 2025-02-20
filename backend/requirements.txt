@@ -1,6 +1,8 @@
 fastapi
 uvicorn
-pydantic
-sentence-transformers
+requests
 faiss-cpu
+scikit-learn
+tensorflow-hub
 numpy
+pydantic

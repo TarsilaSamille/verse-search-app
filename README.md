@@ -1,7 +1,10 @@
 cd backend
-python3 -m venv
-source venv/bin/activate 
-uvicorn .main:app --reload
+python3 -m venv myenv
+source myvenv/bin/activate 
+uvicorn main:app --reload
+
+
+pip install datasets transformers tensorflow tensorflow_hub
 
 
 cd frontend
