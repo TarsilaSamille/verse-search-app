@@ -3,6 +3,7 @@ uvicorn
 numpy
 faiss-cpu
 requests
+tensorflow>=2.12.0
 tensorflow-cpu
 tensorflow-hub
 scikit-learn
