@@ -28,4 +28,4 @@ dataset = Dataset.from_dict({
 dataset.save_to_disk("local_embeddings")
 
 # Upload to Hugging Face
-dataset.push_to_hub("tarsssss/translation-bj-en")
+dataset.push_to_hub("tarsssss/translation-bj-en-2")
