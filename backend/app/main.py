@@ -33,8 +33,8 @@ def health_check():
     return {"status": "healthy", "port": os.environ.get("PORT", "Not Set")}
 
 # Configuração do modelo e cache
-MODEL_PATH = "/app/use_model"
-os.environ["TFHUB_CACHE_DIR"] = "/app/tfhub_cache"
+MODEL_PATH = "/tmp/use_model"
+os.environ["TFHUB_CACHE_DIR"] = "/tmp/tfhub_cache"
 
 try:
     if not os.path.exists(MODEL_PATH):
@@ -134,4 +134,4 @@ def search(request: SearchRequest) -> Dict:
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False, access_log=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=port, access_log=False)
