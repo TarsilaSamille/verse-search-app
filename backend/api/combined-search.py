@@ -25,8 +25,10 @@ logger = logging.getLogger(__name__)
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://verse-search-app.vercel.app"]
-,
+    allow_origins=[
+        "https://verse-search-app.vercel.app",
+        "https://verse-search-app-3.vercel.app"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -161,7 +163,7 @@ def combined_search(request: CombinedSearchRequest) -> Dict:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(
-        "main:app",
+        "combined-search:app",
         host="0.0.0.0",
         port=port,
         reload=False,
