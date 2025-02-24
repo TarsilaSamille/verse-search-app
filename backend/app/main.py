@@ -68,6 +68,7 @@ class SearchRequest(BaseModel):
     query: str
     search_language: str  # "en" or "bj"
 
+
 # Search endpoint
 @app.post("/search")
 async def search(request: SearchRequest) -> Dict:
