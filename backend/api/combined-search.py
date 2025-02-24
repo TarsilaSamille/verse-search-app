@@ -34,6 +34,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Middleware adicional para garantir que os cabeçalhos CORS estejam presentes
+@app.middleware("http")
+async def add_cors_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
+
 # Load Universal Sentence Encoder model
 try:
     model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
