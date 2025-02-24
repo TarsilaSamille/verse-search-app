@@ -30,7 +30,7 @@ app.add_middleware(
         "https://verse-search-app-3.vercel.app"
     ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["OPTIONS", "POST", "GET"],
     allow_headers=["*"],
 )
 
