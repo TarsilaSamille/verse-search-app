@@ -1,22 +1,18 @@
 import os
+import logging
+import requests
+import numpy as np
+import faiss
+import tensorflow_hub as hub
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import numpy as np
-import uvicorn
-import requests
-import faiss
 from sklearn.preprocessing import normalize
-import logging
-import tensorflow_hub as hub
 from typing import List, Dict
+import uvicorn
 
+# Initialize FastAPI app
 app = FastAPI()
-
-# Health check endpoint
-@app.get("/health")
-def health_check():
-    return {"status": "healthy", "port": os.environ.get("PORT")}
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,13 +30,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Middleware adicional para garantir que os cabeçalhos CORS estejam presentes
-@app.middleware("http")
-async def add_cors_headers(request, call_next):
-    response = await call_next(request)
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Credentials"] = "true"
-    return response
+# Health check endpoint
+@app.get("/health")
+def health_check():
+    return {"status": "healthy", "port": os.environ.get("PORT")}
 
 # Load Universal Sentence Encoder model
 try:
@@ -77,7 +70,6 @@ def load_dataset() -> List[Dict]:
                 break
                 
         logger.info(f"Loaded {len(dataset)} entries from dataset")
-        print(f"Dataset length: {len(dataset)}")  # Print the length of the dataset
         return dataset
         
     except Exception as e:
@@ -93,14 +85,15 @@ def create_faiss_index(embeddings: np.ndarray) -> faiss.IndexFlatIP:
     return index
 
 # Initialize dataset and index
-dataset = load_dataset()
-
-# Generate embeddings with Universal Sentence Encoder (consider caching these)
-dataset_texts = [entry["row"]["text"] + " " + entry["row"]["bj_translation"] for entry in dataset]
-dataset_embeddings = model(dataset_texts).numpy()
-
-# Create FAISS index
-index = create_faiss_index(dataset_embeddings)
+try:
+    dataset = load_dataset()
+    dataset_texts = [entry["row"]["text"] + " " + entry["row"]["bj_translation"] for entry in dataset]
+    dataset_embeddings = model(dataset_texts).numpy()
+    index = create_faiss_index(dataset_embeddings)
+    logger.info("Dataset and FAISS index initialized successfully.")
+except Exception as e:
+    logger.error(f"Error initializing dataset or FAISS index: {e}")
+    raise HTTPException(status_code=500, detail="Failed to initialize dataset or index")
 
 class CombinedSearchRequest(BaseModel):
     query: str

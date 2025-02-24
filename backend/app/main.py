@@ -12,17 +12,17 @@ from typing import List, Dict
 import uvicorn
 from dotenv import load_dotenv
 
-# Carrega variáveis de ambiente do arquivo .env
+# Load environment variables from .env file
 load_dotenv()
 
-# Configuração de logging
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Inicializa a aplicação FastAPI
+# Initialize FastAPI app
 app = FastAPI()
 
-# Adiciona middleware CORS
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,26 +31,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Endpoint de verificação de saúde
-@app.get("/health")
-def health_check():
-    return {"status": "healthy", "port": os.environ.get("PORT", "Not Set")}
-
-# Configuração do modelo e cache
+# Set TensorFlow Hub cache directory
 os.environ["TFHUB_CACHE_DIR"] = "/tmp/tfhub_cache"
 
-try:
-    model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
-    logger.info("Modelo Universal Sentence Encoder carregado com sucesso.")
-except Exception as e:
-    logger.error(f"Erro ao carregar o modelo: {e}")
-    raise HTTPException(status_code=500, detail="Falha ao carregar o modelo")
+# Global variables for model, dataset, and index
+model = None
+dataset = None
+index = None
 
-# Configuração do dataset
-DATASET_URL = "https://datasets-server.huggingface.co/rows?dataset=tarsssss%2Ftranslation-bj-en&config=default&split=train"
-BATCH_SIZE = 100
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "port": os.environ.get("PORT", "Not Set")}
 
-def load_dataset() -> List[Dict]:
+# Load the TensorFlow model
+async def load_model():
+    global model
+    try:
+        model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
+        logger.info("Model loaded successfully.")
+    except Exception as e:
+        logger.error(f"Error loading model: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load model")
+
+# Load the dataset
+async def load_dataset() -> List[Dict]:
+    global dataset
+    DATASET_URL = "https://datasets-server.huggingface.co/rows?dataset=tarsssss%2Ftranslation-bj-en&config=default&split=train"
+    BATCH_SIZE = 100
     dataset, offset = [], 0
     try:
         while True:
@@ -61,33 +69,39 @@ def load_dataset() -> List[Dict]:
                 break
             dataset.extend(batch)
             offset += BATCH_SIZE
-        logger.info(f"Dataset carregado com {len(dataset)} entradas.")
-        return dataset
+        logger.info(f"Dataset loaded with {len(dataset)} entries.")
     except Exception as e:
-        logger.error(f"Erro ao carregar dataset: {e}")
-        raise HTTPException(status_code=500, detail="Falha ao carregar dataset")
+        logger.error(f"Error loading dataset: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load dataset")
 
-# Inicializa dataset e indexação
-logger.info("Carregando dataset...")
-dataset = load_dataset()
-dataset_texts = [entry["row"]["text"] + " " + entry["row"]["bj_translation"] for entry in dataset]
-dataset_embeddings = model(dataset_texts).numpy()
-dataset_embeddings = normalize(dataset_embeddings, norm='l2', axis=1)
-
+# Create FAISS index
 def create_faiss_index(embeddings: np.ndarray) -> faiss.IndexFlatIP:
     d = embeddings.shape[1]
     index = faiss.IndexFlatIP(d)
     index.add(embeddings)
     return index
 
-index = create_faiss_index(dataset_embeddings)
+# Initialize model, dataset, and index on startup
+@app.on_event("startup")
+async def startup_event():
+    await load_model()
+    await load_dataset()
+    global index
+    if dataset and model:
+        dataset_texts = [entry["row"]["text"] + " " + entry["row"]["bj_translation"] for entry in dataset]
+        dataset_embeddings = model(dataset_texts).numpy()
+        dataset_embeddings = normalize(dataset_embeddings, norm='l2', axis=1)
+        index = create_faiss_index(dataset_embeddings)
+        logger.info("FAISS index created successfully.")
 
+# Search request model
 class SearchRequest(BaseModel):
     query: str
-    search_language: str  # "en" ou "bj"
+    search_language: str  # "en" or "bj"
 
+# Search endpoint
 @app.post("/search")
-def search(request: SearchRequest) -> Dict:
+async def search(request: SearchRequest) -> Dict:
     try:
         query = request.query.strip().lower()
         search_lang = request.search_language.lower()
@@ -128,9 +142,10 @@ def search(request: SearchRequest) -> Dict:
 
         return {"results": unique_results[:20]}
     except Exception as e:
-        logger.error(f"Erro na busca: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Erro na busca")
+        logger.error(f"Search error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Search error")
 
+# Run the application
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, access_log=False)
