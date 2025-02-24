@@ -10,6 +10,10 @@ from pydantic import BaseModel
 from sklearn.preprocessing import normalize
 from typing import List, Dict
 import uvicorn
+from dotenv import load_dotenv
+
+# Carrega variáveis de ambiente do arquivo .env
+load_dotenv()
 
 # Configuração de logging
 logging.basicConfig(level=logging.INFO)
@@ -33,15 +37,10 @@ def health_check():
     return {"status": "healthy", "port": os.environ.get("PORT", "Not Set")}
 
 # Configuração do modelo e cache
-MODEL_PATH = "/tmp/use_model"
 os.environ["TFHUB_CACHE_DIR"] = "/tmp/tfhub_cache"
 
 try:
-    if not os.path.exists(MODEL_PATH):
-        os.makedirs(MODEL_PATH)
-        model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
-    else:
-        model = hub.load(MODEL_PATH)
+    model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
     logger.info("Modelo Universal Sentence Encoder carregado com sucesso.")
 except Exception as e:
     logger.error(f"Erro ao carregar o modelo: {e}")
