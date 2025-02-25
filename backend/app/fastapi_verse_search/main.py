@@ -20,11 +20,6 @@ async def root():
     return {"greeting": "Hello, World!", "message": "Welcome to FastAPI!"}
 
 
-# Load environment variables from .env file
-load_dotenv()
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,132 +33,134 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Set TensorFlow Hub cache directory
-os.environ["TFHUB_CACHE_DIR"] = "/tmp/tfhub_cache"
-
-# Global variables for model, dataset, and index
-model = None
-dataset = None
-index = None
-
 # Health check endpoint
 @app.get("/health")
-async def health_check():
-    return {"status": "healthy", "port": os.environ.get("PORT", "Not Set")}
+def health_check():
+    return {"status": "healthy", "port": os.environ.get("PORT")}
 
-# Load the TensorFlow model
-async def load_model():
-    global model
-    try:
-        model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
-        logger.info("Model loaded successfully.")
-        logger.info(f"Available signatures: {list(model.signatures.keys())}")
-    except Exception as e:
-        logger.error(f"Error loading model: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load model")
+# Load Universal Sentence Encoder model
+try:
+    model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
+    logger.info("Universal Sentence Encoder model loaded successfully.")
+except Exception as e:
+    logger.error(f"Error loading Universal Sentence Encoder model: {e}")
+    raise HTTPException(status_code=500, detail="Failed to load the model")
 
-# Load the dataset in smaller batches
-async def load_dataset() -> List[Dict]:
-    global dataset
-    DATASET_URL = "https://datasets-server.huggingface.co/rows?dataset=tarsssss%2Ftranslation-bj-en&config=default&split=train"
-    BATCH_SIZE = 100
-    MAX_DATASET_SIZE = 10000  # Limit dataset size
-    dataset, offset = [], 0
+# Dataset configuration
+DATASET_BASE_URL = "https://datasets-server.huggingface.co/rows?dataset=tarsssss%2Ftranslation-bj-en&config=default&split=train"
+BATCH_SIZE = 100  # Max allowed by server
+
+def load_dataset() -> List[Dict]:
+    """Load dataset with pagination to handle server limits"""
+    dataset = []
+    offset = 0
+    
     try:
         while True:
-            response = requests.get(f"{DATASET_URL}&offset={offset}&length={BATCH_SIZE}")
+            url = f"{DATASET_BASE_URL}&offset={offset}&length={BATCH_SIZE}"
+            response = requests.get(url)
             response.raise_for_status()
+            
             batch = response.json().get("rows", [])
-            if not batch or len(dataset) >= MAX_DATASET_SIZE:
+            if not batch:
                 break
+                
             dataset.extend(batch)
             offset += BATCH_SIZE
-        logger.info(f"Dataset loaded with {len(dataset)} entries.")
+            
+            # Stop if we get fewer results than requested
+            if len(batch) < BATCH_SIZE:
+                break
+                
+        logger.info(f"Loaded {len(dataset)} entries from dataset")
+        return dataset
+        
     except Exception as e:
         logger.error(f"Error loading dataset: {e}")
         raise HTTPException(status_code=500, detail="Failed to load dataset")
 
-# Create FAISS index with memory-efficient settings
-def create_faiss_index(embeddings: np.ndarray) -> faiss.IndexIVFFlat:
+def create_faiss_index(embeddings: np.ndarray) -> faiss.IndexFlatIP:
+    """Create and populate FAISS index with normalized embeddings"""
+    embeddings = normalize(embeddings, norm='l2', axis=1)
     d = embeddings.shape[1]
-    quantizer = faiss.IndexFlatL2(d)
-    index = faiss.IndexIVFFlat(quantizer, d, 100)  # 100 clusters
-    index.train(embeddings)
+    index = faiss.IndexFlatIP(d)  # Use Inner Product for cosine similarity
     index.add(embeddings)
     return index
 
-# Initialize model, dataset, and index on startup
-@app.on_event("startup")
-async def startup_event():
-    await load_model()
-    await load_dataset()
-    global index
-    if dataset and model:
-        dataset_texts = [entry["row"]["text"] + " " + entry["row"]["bj_translation"] for entry in dataset]
-        
-        # Process embeddings in smaller batches to avoid memory issues
-        batch_size = 100
-        dataset_embeddings = []
-        for i in range(0, len(dataset_texts), batch_size):
-            batch_texts = dataset_texts[i:i + batch_size]
-            # Use the correct signature for the model
-            embed_fn = model.signatures["serving_default"]
-            embeddings = embed_fn(tf.constant(batch_texts))["outputs"].numpy()
-            embeddings = normalize(embeddings, norm='l2', axis=1)
-            dataset_embeddings.append(embeddings)
-        
-        dataset_embeddings = np.vstack(dataset_embeddings)
-        index = create_faiss_index(dataset_embeddings)
-        logger.info("FAISS index created successfully.")
+# Initialize dataset and index
+try:
+    dataset = load_dataset()
+    dataset_texts = [entry["row"]["text"] + " " + entry["row"]["bj_translation"] for entry in dataset]
+    dataset_embeddings = model(dataset_texts).numpy()
+    index = create_faiss_index(dataset_embeddings)
+    logger.info("Dataset and FAISS index initialized successfully.")
+except Exception as e:
+    logger.error(f"Error initializing dataset or FAISS index: {e}")
+    raise HTTPException(status_code=500, detail="Failed to initialize dataset or index")
 
-# Search request model
-class SearchRequest(BaseModel):
+class CombinedSearchRequest(BaseModel):
     query: str
-    search_language: str  # "en" or "bj"
+    search_language: str  # "en" for English, "bj" for BJ
 
-# Search endpoint
-@app.post("/search")
-async def search(request: SearchRequest) -> Dict:
+@app.post("/combined-search")
+def combined_search(request: CombinedSearchRequest) -> Dict:
     try:
         query = request.query.strip().lower()
-        search_lang = request.search_language.lower()
-        
-        text_matches = [
-            {
-                "english": entry["row"]["text"],
-                "bj_translation": entry["row"]["bj_translation"],
-                "similarity": 1.0,
-                "type": "text_match",
-                "id": entry["row"].get("id", hash(entry["row"]["text"]))
-            }
-            for entry in dataset
-            if query in (entry["row"]["text"].lower() if search_lang == "en" else entry["row"]["bj_translation"].lower())
-        ]
+        search_language = request.search_language.lower()
+        results = []
 
-        # Use the correct signature for the model
-        query_embedding = model.signatures["default"](inputs=tf.constant([query]))["outputs"].numpy()
+        # 1. Text-based search
+        text_matches = []
+        for entry in dataset:
+            target_text = (
+                entry["row"]["text"].lower() 
+                if search_language == "en" 
+                else entry["row"]["bj_translation"].lower()
+            )
+            
+            if query in target_text:
+                text_matches.append({
+                    "english": entry["row"]["text"],
+                    "bj_translation": entry["row"]["bj_translation"],
+                    "similarity": 1.0,  # Exact match gets max score
+                    "type": "text_match",
+                    "id": entry["row"].get("id", hash(entry["row"]["text"]))  # Unique identifier
+                })
+
+        # 2. Semantic search
+        query_embedding = model([query]).numpy()
         query_embedding = normalize(query_embedding, norm='l2', axis=1)
+        
+        # Search with FAISS
         similarities, indices = index.search(query_embedding, 10)
         
-        semantic_matches = [
-            {
-                "english": dataset[idx]["row"]["text"],
-                "bj_translation": dataset[idx]["row"]["bj_translation"],
+        semantic_matches = []
+        for idx, score in zip(indices[0], similarities[0]):
+            if idx < 0:  # FAISS returns -1 for invalid indices
+                continue
+                
+            entry = dataset[idx]["row"]
+            semantic_matches.append({
+                "english": entry["text"],
+                "bj_translation": entry["bj_translation"],
                 "similarity": float(score),
                 "type": "semantic_match",
-                "id": dataset[idx]["row"].get("id", hash(dataset[idx]["row"]["text"]))
-            }
-            for idx, score in zip(indices[0], similarities[0]) if idx >= 0
-        ]
+                "id": entry.get("id", hash(entry["text"]))
+            })
 
-        final_results = sorted(text_matches + semantic_matches, key=lambda x: x["similarity"], reverse=True)
-        seen_ids, unique_results = set(), []
-        for result in final_results:
+        # Combine and deduplicate results
+        combined_results = text_matches + semantic_matches
+        seen_ids = set()
+        final_results = []
+        
+        for result in sorted(combined_results, key=lambda x: x["similarity"], reverse=True):
             if result["id"] not in seen_ids:
                 seen_ids.add(result["id"])
-                unique_results.append(result)
+                final_results.append(result)
 
-        return {"results": unique_results[:20]}
+        return {"results": final_results[:20]}  # Return top 20 results
+
     except Exception as e:
         logger.error(f"Search error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Search error")
+        raise HTTPException(status_code=500, detail="Search failed")
+
