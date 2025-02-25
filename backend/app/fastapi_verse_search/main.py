@@ -1,6 +1,5 @@
 import os
 import logging
-import requests
 import numpy as np
 import faiss
 import tensorflow_hub as hub
@@ -12,8 +11,6 @@ from typing import List, Dict
 import uvicorn
 from dotenv import load_dotenv
 from datasets import load_dataset
-import tensorflow as tf
-from contextlib import asynccontextmanager
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -152,3 +149,5 @@ async def search(request: SearchRequest) -> Dict:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, access_log=False)
+
+    
