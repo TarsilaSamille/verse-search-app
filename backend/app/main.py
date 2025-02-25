@@ -11,6 +11,7 @@ from sklearn.preprocessing import normalize
 from typing import List, Dict
 import uvicorn
 from dotenv import load_dotenv
+import tensorflow as tf
 
 # Load environment variables from .env file
 load_dotenv()
@@ -48,7 +49,7 @@ async def health_check():
 async def load_model():
     global model
     try:
-        model = hub.load("https://tfhub.dev/google/universal-sentence-encoder-lite/2")  # Use a smaller model
+        model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
         logger.info("Model loaded successfully.")
     except Exception as e:
         logger.error(f"Error loading model: {e}")
@@ -92,8 +93,18 @@ async def startup_event():
     global index
     if dataset and model:
         dataset_texts = [entry["row"]["text"] + " " + entry["row"]["bj_translation"] for entry in dataset]
-        dataset_embeddings = model(dataset_texts).numpy()
-        dataset_embeddings = normalize(dataset_embeddings, norm='l2', axis=1)
+        
+        # Process embeddings in smaller batches to avoid memory issues
+        batch_size = 100
+        dataset_embeddings = []
+        for i in range(0, len(dataset_texts), batch_size):
+            batch_texts = dataset_texts[i:i + batch_size]
+            # Use the correct signature for the model
+            embeddings = model.signatures["default"](inputs=tf.constant(batch_texts))["outputs"].numpy()
+            embeddings = normalize(embeddings, norm='l2', axis=1)
+            dataset_embeddings.append(embeddings)
+        
+        dataset_embeddings = np.vstack(dataset_embeddings)
         index = create_faiss_index(dataset_embeddings)
         logger.info("FAISS index created successfully.")
 
@@ -121,7 +132,8 @@ async def search(request: SearchRequest) -> Dict:
             if query in (entry["row"]["text"].lower() if search_lang == "en" else entry["row"]["bj_translation"].lower())
         ]
 
-        query_embedding = model([query]).numpy()
+        # Use the correct signature for the model
+        query_embedding = model.signatures["default"](inputs=tf.constant([query]))["outputs"].numpy()
         query_embedding = normalize(query_embedding, norm='l2', axis=1)
         similarities, indices = index.search(query_embedding, 10)
         
