@@ -15,6 +15,8 @@ import tensorflow as tf
 
 # Load environment variables from .env file
 load_dotenv()
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
