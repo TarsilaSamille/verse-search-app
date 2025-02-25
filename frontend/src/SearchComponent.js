@@ -39,6 +39,7 @@ const SearchComponent = () => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ query, search_language: searchLanguage }),
+    mode: "cors"
       });
 
       const data = await response.json();

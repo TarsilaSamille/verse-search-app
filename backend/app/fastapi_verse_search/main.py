@@ -11,17 +11,9 @@ from sklearn.preprocessing import normalize
 from typing import List, Dict
 import uvicorn
 from dotenv import load_dotenv
+from datasets import load_dataset
 import tensorflow as tf
 from contextlib import asynccontextmanager
-
-# Load environment variables from .env file
-load_dotenv()
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -34,13 +26,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Load environment variables from .env file
+load_dotenv()
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Set TensorFlow Hub cache directory
 os.environ["TFHUB_CACHE_DIR"] = "/tmp/tfhub_cache"
 
 # Global variables for model, dataset, and index
 model = None
-dataset = None
+dataset = []  # Inicializar como lista vazia
 index = None
 
 # Health check endpoint
@@ -54,27 +53,16 @@ async def load_model():
     try:
         model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
         logger.info("Model loaded successfully.")
-        logger.info(f"Available signatures: {list(model.signatures.keys())}")
     except Exception as e:
         logger.error(f"Error loading model: {e}")
         raise HTTPException(status_code=500, detail="Failed to load model")
 
-# Load the dataset in smaller batches
-async def load_dataset() -> List[Dict]:
+# Load the dataset from Hugging Face
+async def load_translation_dataset() -> List[Dict]:
     global dataset
-    DATASET_URL = "https://datasets-server.huggingface.co/rows?dataset=tarsssss%2Ftranslation-bj-en&config=default&split=train"
-    BATCH_SIZE = 100
-    MAX_DATASET_SIZE = 10000  # Limit dataset size
-    dataset, offset = [], 0
     try:
-        while True:
-            response = requests.get(f"{DATASET_URL}&offset={offset}&length={BATCH_SIZE}")
-            response.raise_for_status()
-            batch = response.json().get("rows", [])
-            if not batch or len(dataset) >= MAX_DATASET_SIZE:
-                break
-            dataset.extend(batch)
-            offset += BATCH_SIZE
+        print("Loading embeddings from Hugging Face...")
+        dataset = load_dataset('tarsssss/translation-bj-en', split='train')
         logger.info(f"Dataset loaded with {len(dataset)} entries.")
     except Exception as e:
         logger.error(f"Error loading dataset: {e}")
@@ -90,27 +78,19 @@ def create_faiss_index(embeddings: np.ndarray) -> faiss.IndexIVFFlat:
     return index
 
 # Initialize model, dataset, and index on startup
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+@app.on_event("startup")
+async def startup_event():
     await load_model()
-    await load_dataset()
+    await load_translation_dataset()
     global index
     if dataset and model:
-        dataset_texts = [entry["row"]["text"] + " " + entry["row"]["bj_translation"] for entry in dataset]
+        embeddings = np.array(dataset['embedding'], dtype=np.float32)
         
-        # Process embeddings in smaller batches to avoid memory issues
-        batch_size = 100
-        dataset_embeddings = []
-        for i in range(0, len(dataset_texts), batch_size):
-            batch_texts = dataset_texts[i:i + batch_size]
-            # Use the correct signature for the model
-            embed_fn = model.signatures["serving_default"]
-            embeddings = embed_fn(tf.constant(batch_texts))["outputs"].numpy()
-            embeddings = normalize(embeddings, norm='l2', axis=1)
-            dataset_embeddings.append(embeddings)
-        
-        dataset_embeddings = np.vstack(dataset_embeddings)
-        index = create_faiss_index(dataset_embeddings)
+        # Ensure embeddings have the correct shape
+        d = embeddings.shape[1]
+        print(f"Embedding dimension: {d}")
+
+        index = create_faiss_index(embeddings)
         logger.info("FAISS index created successfully.")
 
 # Search request model
@@ -122,33 +102,36 @@ class SearchRequest(BaseModel):
 @app.post("/search")
 async def search(request: SearchRequest) -> Dict:
     try:
+        if not dataset:
+            raise HTTPException(status_code=500, detail="Dataset not loaded")
+
         query = request.query.strip().lower()
         search_lang = request.search_language.lower()
-        
+    
         text_matches = [
             {
-                "english": entry["row"]["text"],
-                "bj_translation": entry["row"]["bj_translation"],
+                "english": entry["text"],
+                "bj_translation": entry["bj_translation"],
                 "similarity": 1.0,
                 "type": "text_match",
-                "id": entry["row"].get("id", hash(entry["row"]["text"]))
+                "id": entry.get("id", hash(entry["text"]))
             }
             for entry in dataset
-            if query in (entry["row"]["text"].lower() if search_lang == "en" else entry["row"]["bj_translation"].lower())
+            if query in (entry["text"].lower() if search_lang == "en" else entry["bj_translation"].lower())
         ]
 
-        # Use the correct signature for the model
-        query_embedding = model.signatures["default"](inputs=tf.constant([query]))["outputs"].numpy()
+        # Use the model to encode the query
+        query_embedding = model([query]).numpy()
         query_embedding = normalize(query_embedding, norm='l2', axis=1)
         similarities, indices = index.search(query_embedding, 10)
         
         semantic_matches = [
             {
-                "english": dataset[idx]["row"]["text"],
-                "bj_translation": dataset[idx]["row"]["bj_translation"],
+                "english": dataset[int(idx)]["text"],
+                "bj_translation": dataset[int(idx)]["bj_translation"],
                 "similarity": float(score),
                 "type": "semantic_match",
-                "id": dataset[idx]["row"].get("id", hash(dataset[idx]["row"]["text"]))
+                "id": dataset[int(idx)].get("id", hash(dataset[int(idx)]["text"]))
             }
             for idx, score in zip(indices[0], similarities[0]) if idx >= 0
         ]
@@ -169,4 +152,3 @@ async def search(request: SearchRequest) -> Dict:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, access_log=False)
-
