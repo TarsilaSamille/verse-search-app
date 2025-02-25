@@ -51,6 +51,7 @@ async def load_model():
     try:
         model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
         logger.info("Model loaded successfully.")
+        logger.info(f"Available signatures: {list(model.signatures.keys())}")
     except Exception as e:
         logger.error(f"Error loading model: {e}")
         raise HTTPException(status_code=500, detail="Failed to load model")
@@ -93,18 +94,10 @@ async def startup_event():
     global index
     if dataset and model:
         dataset_texts = [entry["row"]["text"] + " " + entry["row"]["bj_translation"] for entry in dataset]
-        
-        # Process embeddings in smaller batches to avoid memory issues
-        batch_size = 100
-        dataset_embeddings = []
-        for i in range(0, len(dataset_texts), batch_size):
-            batch_texts = dataset_texts[i:i + batch_size]
-            # Use the correct signature for the model
-            embeddings = model.signatures["default"](inputs=tf.constant(batch_texts))["outputs"].numpy()
-            embeddings = normalize(embeddings, norm='l2', axis=1)
-            dataset_embeddings.append(embeddings)
-        
-        dataset_embeddings = np.vstack(dataset_embeddings)
+        # Use the correct signature for the model
+        embed_fn = model.signatures["serving_default"]
+        dataset_embeddings = embed_fn(tf.constant(dataset_texts))["outputs"].numpy()
+        dataset_embeddings = normalize(dataset_embeddings, norm='l2', axis=1)
         index = create_faiss_index(dataset_embeddings)
         logger.info("FAISS index created successfully.")
 
@@ -164,3 +157,4 @@ async def search(request: SearchRequest) -> Dict:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, access_log=False)
+
