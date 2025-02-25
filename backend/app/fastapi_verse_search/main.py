@@ -12,6 +12,7 @@ from typing import List, Dict
 import uvicorn
 from dotenv import load_dotenv
 import tensorflow as tf
+from contextlib import asynccontextmanager
 
 # Load environment variables from .env file
 load_dotenv()
@@ -89,8 +90,8 @@ def create_faiss_index(embeddings: np.ndarray) -> faiss.IndexIVFFlat:
     return index
 
 # Initialize model, dataset, and index on startup
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     await load_model()
     await load_dataset()
     global index

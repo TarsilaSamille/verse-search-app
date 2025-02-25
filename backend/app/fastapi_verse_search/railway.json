@@ -4,6 +4,6 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "unicorn main:app --bind \"[::]:$PORT\""
+    "startCommand": "python main.py"
   }
 }
