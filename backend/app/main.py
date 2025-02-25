@@ -34,40 +34,73 @@ app.add_middleware(
 # Set TensorFlow Hub cache directory
 os.environ["TFHUB_CACHE_DIR"] = "/tmp/tfhub_cache"
 
-# Load the TensorFlow model
-def load_model():
-    try:
-        model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
-        logger.info("Model loaded successfully.")
-        return model
-    except Exception as e:
-        logger.error(f"Error loading model: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load model")
-
-# Fetch dataset in batches
-def fetch_batch(offset=0, length=10):
-    DATASET_URL = "https://datasets-server.huggingface.co/rows?dataset=tarsssss%2Ftranslation-bj-en&config=default&split=train"
-    try:
-        response = requests.get(f"{DATASET_URL}&offset={offset}&length={length}")
-        response.raise_for_status()
-        return response.json().get("rows", [])
-    except Exception as e:
-        logger.error(f"Error fetching batch: {e}")
-        return []
-
-# Load model on startup
-model = load_model()
+# Global variables for model, dataset, and index
+model = None
+dataset = None
+index = None
 
 # Health check endpoint
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "port": os.environ.get("PORT", "Not Set")}
 
+# Load the TensorFlow model
+async def load_model():
+    global model
+    try:
+        model = hub.load("https://tfhub.dev/google/universal-sentence-encoder-lite/2")  # Use a smaller model
+        logger.info("Model loaded successfully.")
+    except Exception as e:
+        logger.error(f"Error loading model: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load model")
+
+# Load the dataset in smaller batches
+async def load_dataset() -> List[Dict]:
+    global dataset
+    DATASET_URL = "https://datasets-server.huggingface.co/rows?dataset=tarsssss%2Ftranslation-bj-en&config=default&split=train"
+    BATCH_SIZE = 100
+    MAX_DATASET_SIZE = 10000  # Limit dataset size
+    dataset, offset = [], 0
+    try:
+        while True:
+            response = requests.get(f"{DATASET_URL}&offset={offset}&length={BATCH_SIZE}")
+            response.raise_for_status()
+            batch = response.json().get("rows", [])
+            if not batch or len(dataset) >= MAX_DATASET_SIZE:
+                break
+            dataset.extend(batch)
+            offset += BATCH_SIZE
+        logger.info(f"Dataset loaded with {len(dataset)} entries.")
+    except Exception as e:
+        logger.error(f"Error loading dataset: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load dataset")
+
+# Create FAISS index with memory-efficient settings
+def create_faiss_index(embeddings: np.ndarray) -> faiss.IndexIVFFlat:
+    d = embeddings.shape[1]
+    quantizer = faiss.IndexFlatL2(d)
+    index = faiss.IndexIVFFlat(quantizer, d, 100)  # 100 clusters
+    index.train(embeddings)
+    index.add(embeddings)
+    return index
+
+# Initialize model, dataset, and index on startup
+@app.on_event("startup")
+async def startup_event():
+    await load_model()
+    await load_dataset()
+    global index
+    if dataset and model:
+        dataset_texts = [entry["row"]["text"] + " " + entry["row"]["bj_translation"] for entry in dataset]
+        dataset_embeddings = model(dataset_texts).numpy()
+        dataset_embeddings = normalize(dataset_embeddings, norm='l2', axis=1)
+        index = create_faiss_index(dataset_embeddings)
+        logger.info("FAISS index created successfully.")
+
 # Search request model
 class SearchRequest(BaseModel):
     query: str
     search_language: str  # "en" or "bj"
-
 
 # Search endpoint
 @app.post("/search")
@@ -75,38 +108,42 @@ async def search(request: SearchRequest) -> Dict:
     try:
         query = request.query.strip().lower()
         search_lang = request.search_language.lower()
+        
+        text_matches = [
+            {
+                "english": entry["row"]["text"],
+                "bj_translation": entry["row"]["bj_translation"],
+                "similarity": 1.0,
+                "type": "text_match",
+                "id": entry["row"].get("id", hash(entry["row"]["text"]))
+            }
+            for entry in dataset
+            if query in (entry["row"]["text"].lower() if search_lang == "en" else entry["row"]["bj_translation"].lower())
+        ]
 
         query_embedding = model([query]).numpy()
-        query_embedding = normalize(query_embedding, norm="l2", axis=1)
+        query_embedding = normalize(query_embedding, norm='l2', axis=1)
+        similarities, indices = index.search(query_embedding, 10)
+        
+        semantic_matches = [
+            {
+                "english": dataset[idx]["row"]["text"],
+                "bj_translation": dataset[idx]["row"]["bj_translation"],
+                "similarity": float(score),
+                "type": "semantic_match",
+                "id": dataset[idx]["row"].get("id", hash(dataset[idx]["row"]["text"]))
+            }
+            for idx, score in zip(indices[0], similarities[0]) if idx >= 0
+        ]
 
-        results, offset, batch_size = [], 0, 100  # Processa 100 por vez
+        final_results = sorted(text_matches + semantic_matches, key=lambda x: x["similarity"], reverse=True)
+        seen_ids, unique_results = set(), []
+        for result in final_results:
+            if result["id"] not in seen_ids:
+                seen_ids.add(result["id"])
+                unique_results.append(result)
 
-        while True:
-            batch = fetch_batch(offset, batch_size)
-            if not batch:
-                break  # Se não houver mais dados, para
-
-            batch_texts = [entry["row"]["text"] + " " + entry["row"]["bj_translation"] for entry in batch]
-            batch_embeddings = model(batch_texts).numpy()
-            batch_embeddings = normalize(batch_embeddings, norm="l2", axis=1)
-
-            similarities = np.dot(batch_embeddings, query_embedding.T).flatten()
-
-            for idx, score in enumerate(similarities):
-                if score > 0.5:  # Apenas resultados relevantes
-                    results.append({
-                        "english": batch[idx]["row"]["text"],
-                        "bj_translation": batch[idx]["row"]["bj_translation"],
-                        "similarity": float(score),
-                        "type": "semantic_match",
-                        "id": batch[idx]["row"].get("id", hash(batch[idx]["row"]["text"]))
-                    })
-
-            offset += batch_size  # Avança para o próximo lote
-
-        results = sorted(results, key=lambda x: x["similarity"], reverse=True)[:20]
-
-        return {"results": results}
+        return {"results": unique_results[:20]}
     except Exception as e:
         logger.error(f"Search error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Search error")
