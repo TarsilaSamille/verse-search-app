@@ -11,6 +11,12 @@ from typing import List, Dict
 import uvicorn
 from dotenv import load_dotenv
 from datasets import load_dataset
+import os
+import tensorflow as tf
+
+# Força TensorFlow a rodar apenas na CPU
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+tf.config.set_visible_devices([], "GPU")
 
 # Initialize FastAPI app
 app = FastAPI()
