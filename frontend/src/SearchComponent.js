@@ -33,7 +33,7 @@ const SearchComponent = () => {
     setError("");
     try {
       // Send the query and search language to the backend
-      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/combined-search`, {
+      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/search`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
