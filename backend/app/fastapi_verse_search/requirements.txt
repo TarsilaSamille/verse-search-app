@@ -8,3 +8,4 @@ tensorflow-hub
 scikit-learn
 python-multipart
 python-dotenv
+uvicorn
