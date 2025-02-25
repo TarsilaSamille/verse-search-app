@@ -13,12 +13,14 @@ from typing import List, Dict
 from dotenv import load_dotenv
 import tensorflow as tf
 
+# Force TensorFlow to use only CPU
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
 app = FastAPI()
 
 @app.get("/")
 async def root():
     return {"greeting": "Hello, World!", "message": "Welcome to FastAPI!"}
-
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -163,4 +165,3 @@ def combined_search(request: CombinedSearchRequest) -> Dict:
     except Exception as e:
         logger.error(f"Search error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Search failed")
-
