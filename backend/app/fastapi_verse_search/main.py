@@ -10,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sklearn.preprocessing import normalize
 from typing import List, Dict
-import uvicorn
 from dotenv import load_dotenv
 import tensorflow as tf
 
