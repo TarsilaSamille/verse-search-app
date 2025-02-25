@@ -1,5 +1,4 @@
 fastapi
-hypercorn
 numpy
 faiss-cpu
 requests

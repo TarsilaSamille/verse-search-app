@@ -13,9 +13,6 @@ from typing import List, Dict
 from dotenv import load_dotenv
 import tensorflow as tf
 
-# Force TensorFlow to use only CPU
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-
 app = FastAPI()
 
 @app.get("/")
@@ -50,7 +47,7 @@ except Exception as e:
 
 # Dataset configuration
 DATASET_BASE_URL = "https://datasets-server.huggingface.co/rows?dataset=tarsssss%2Ftranslation-bj-en&config=default&split=train"
-BATCH_SIZE = 100  # Max allowed by server
+BATCH_SIZE = 100  
 
 def load_dataset() -> List[Dict]:
     """Load dataset with pagination to handle server limits"""
@@ -165,3 +162,12 @@ def combined_search(request: CombinedSearchRequest) -> Dict:
     except Exception as e:
         logger.error(f"Search error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Search failed")
+    
+
+if __name__ == "__main__":
+    import hypercorn.asyncio
+    from hypercorn.config import Config
+
+    config = Config()
+    config.bind = ["0.0.0.0:" + os.environ.get("PORT", "8000")]
+    hypercorn.asyncio.run_single(config, app)
