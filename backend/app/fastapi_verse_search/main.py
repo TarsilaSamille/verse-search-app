@@ -1,8 +1,7 @@
 import os
 import logging
 import numpy as np
-import faiss
-import torch
+from sentence_transformers import SentenceTransformer
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -10,9 +9,8 @@ from sklearn.preprocessing import normalize
 from typing import List, Dict
 import uvicorn
 from dotenv import load_dotenv
-from datasets import load_dataset
-from sentence_transformers import SentenceTransformer
-from tqdm import tqdm 
+from datasets import load_dataset, Dataset
+
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -33,7 +31,6 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global variables for model, dataset, and index
 model = None
 dataset = []  # Initialize as empty list
 index = None
@@ -48,41 +45,41 @@ def load_model():
         raise HTTPException(status_code=500, detail="Failed to load model")
 
 async def load_translation_dataset() -> List[Dict]:
-    global dataset
+    global dataset, index
     try:
         logger.info("Loading dataset from Hugging Face...")
         dataset = load_dataset('tarsssss/translation-bj-en', split='train')
+        dataset.add_faiss_index(column='embedding')
+        index = dataset.get_index('embedding').faiss_index
         logger.info(f"Dataset loaded with {len(dataset)} entries.")
+
     except Exception as e:
         logger.error(f"Error loading dataset: {e}")
         raise HTTPException(status_code=500, detail="Failed to load dataset")
-
-def create_faiss_index(embeddings: np.ndarray) -> faiss.IndexFlatL2:
-    d = embeddings.shape[1]
-    index = faiss.IndexFlatL2(d)
-    index.add(embeddings)
-    return index
-
-async def initialize_index():
-    global index
-    if dataset and model:
-        # Extract embeddings from the dataset
-        embeddings = np.array([model.encode(entry["text"]) for entry in tqdm(dataset, desc="Creating embeddings")], dtype=np.float32)
-        embeddings = normalize(embeddings, norm='l2', axis=1)  # Normalize embeddings
-        logger.info(f"Embedding dimension: {embeddings.shape[1]}")
-        index = create_faiss_index(embeddings)
-        logger.info("FAISS index created successfully.")
 
 @app.on_event("startup")
 async def startup_event():
     load_model()
     await load_translation_dataset()
-    await initialize_index()
 
 # Search request model
 class SearchRequest(BaseModel):
     query: str
     search_language: str  # "en" or "bj"
+
+
+def search_q(query, k=5):
+    query_embedding = model.encode([query], convert_to_numpy=True)
+    
+    # Search in the FAISS index
+    scores, indices = index.search(np.array(query_embedding), k=k)
+    indices = indices[0].tolist()  # Convert numpy array to a regular list of ints
+    # Ensure indices are within bounds
+    valid_indices = [i for i in indices if i < len(dataset)]
+    # Fetch the corresponding samples from the dataset
+    samples = [{"idx": i,"score": scores[i][valid_indices.index(i)], **dataset[i]} for i in valid_indices]  # Accessing samples using indices
+    return samples
+
 
 @app.post("/search")
 async def search(request: SearchRequest) -> Dict:
@@ -105,20 +102,16 @@ async def search(request: SearchRequest) -> Dict:
             if query in (entry["text"].lower() if search_lang == "en" else entry["bj_translation"].lower())
         ]
 
-        # Use the model to encode the query
-        query_embedding = model.encode([query], convert_to_numpy=True)
-        query_embedding = normalize(query_embedding, norm='l2', axis=1)  # Normalize query embedding
-        similarities, indices = index.search(query_embedding, 10)
-        
+        samples = search_q(query, 10)
         semantic_matches = [
             {
-                "english": dataset[int(idx)]["text"],
-                "bj_translation": dataset[int(idx)]["bj_translation"],
-                "similarity": float(score),
+                "english": s["text"],
+                "bj_translation": s["bj_translation"],
+                "similarity": float(s["score"]),
                 "type": "semantic_match",
-                "id": dataset[int(idx)].get("id", hash(dataset[int(idx)]["text"]))
+                "id": s["idx"]
             }
-            for idx, score in zip(indices[0], similarities[0]) if idx >= 0
+            for s in samples if s["idx"] >= 0
         ]
 
         final_results = sorted(text_matches + semantic_matches, key=lambda x: x["similarity"], reverse=True)
