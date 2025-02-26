@@ -5,11 +5,12 @@ from sentence_transformers import SentenceTransformer
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sklearn.preprocessing import normalize
 from typing import List, Dict
 import uvicorn
 from dotenv import load_dotenv
 from datasets import load_dataset
-from annoy import AnnoyIndex
+
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -33,8 +34,6 @@ logger = logging.getLogger(__name__)
 model = None
 dataset = []  # Initialize as empty list
 index = None
-annoy_index = None
-dim = 384  # Dimension of embeddings for MiniLM model
 
 def load_model():
     global model
@@ -46,19 +45,14 @@ def load_model():
         raise HTTPException(status_code=500, detail="Failed to load model")
 
 async def load_translation_dataset() -> List[Dict]:
-    global dataset, annoy_index
+    global dataset, index
     try:
         logger.info("Loading dataset from Hugging Face...")
         dataset = load_dataset('tarsssss/translation-bj-en', split='train')
-        
-        # Initialize Annoy index
-        annoy_index = AnnoyIndex(dim, 'angular')
-        for i, entry in enumerate(dataset):
-            embedding = np.array(entry['embedding'])
-            annoy_index.add_item(i, embedding)
-        
-        annoy_index.build(10)  # 10 trees for fast lookup
+        dataset.add_faiss_index(column='embedding')
+        index = dataset.get_index('embedding').faiss_index
         logger.info(f"Dataset loaded with {len(dataset)} entries.")
+
     except Exception as e:
         logger.error(f"Error loading dataset: {e}")
         raise HTTPException(status_code=500, detail="Failed to load dataset")
@@ -73,15 +67,19 @@ class SearchRequest(BaseModel):
     query: str
     search_language: str  # "en" or "bj"
 
+
 def search_q(query, k=5):
-    query_embedding = model.encode(query, convert_to_numpy=True)
-    indices = annoy_index.get_nns_by_vector(query_embedding, k, include_distances=True)
-    results = [
-        {"idx": idx, "score": 1 - dist, **dataset[idx]}
-        for idx, dist in zip(*indices)
-        if idx < len(dataset)
-    ]
-    return results
+    query_embedding = model.encode([query], convert_to_numpy=True)
+    
+    # Search in the FAISS index
+    scores, indices = index.search(np.array(query_embedding), k=k)
+    indices = indices[0].tolist()  # Convert numpy array to a regular list of ints
+    # Ensure indices are within bounds
+    valid_indices = [i for i in indices if i < len(dataset)]
+    # Fetch the corresponding samples from the dataset
+    samples = [{"idx": i,"score": scores[0][valid_indices.index(i)], **dataset[i]} for i in valid_indices]  # Accessing samples using indices
+    return samples
+
 
 @app.post("/search")
 async def search(request: SearchRequest) -> Dict:
@@ -131,3 +129,5 @@ async def search(request: SearchRequest) -> Dict:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, access_log=False)
+
+    change for annoy instead of faiss
