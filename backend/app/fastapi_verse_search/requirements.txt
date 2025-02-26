@@ -1,11 +1,9 @@
 fastapi
-numpy
-faiss-cpu
-requests
-tensorflow-cpu
-tensorflow-hub
-scikit-learn
-python-multipart
-python-dotenv
 uvicorn
+faiss-cpu
+torch
+sentence-transformers
+numpy
+scikit-learn
+python-dotenv
 datasets

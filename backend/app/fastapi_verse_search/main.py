@@ -2,7 +2,7 @@ import os
 import logging
 import numpy as np
 import faiss
-import tensorflow_hub as hub
+import torch
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -11,12 +11,7 @@ from typing import List, Dict
 import uvicorn
 from dotenv import load_dotenv
 from datasets import load_dataset
-import os
-import tensorflow as tf
-
-# Força TensorFlow a rodar apenas na CPU
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-tf.config.set_visible_devices([], "GPU")
+from sentence_transformers import SentenceTransformer
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -29,70 +24,52 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 # Load environment variables from .env file
 load_dotenv()
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Set TensorFlow Hub cache directory
-os.environ["TFHUB_CACHE_DIR"] = "/tmp/tfhub_cache"
 
 # Global variables for model, dataset, and index
 model = None
 dataset = []  # Inicializar como lista vazia
 index = None
 
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "port": os.environ.get("PORT", "Not Set")}
-
-# Load the TensorFlow model
-async def load_model():
+def load_model():
     global model
     try:
-        model = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
+        model = SentenceTransformer("all-MiniLM-L6-v2")
         logger.info("Model loaded successfully.")
     except Exception as e:
         logger.error(f"Error loading model: {e}")
         raise HTTPException(status_code=500, detail="Failed to load model")
 
-# Load the dataset from Hugging Face
-async def load_translation_dataset() -> List[Dict]:
+def load_translation_dataset() -> List[Dict]:
     global dataset
     try:
-        print("Loading embeddings from Hugging Face...")
+        print("Loading dataset from Hugging Face...")
         dataset = load_dataset('tarsssss/translation-bj-en', split='train')
         logger.info(f"Dataset loaded with {len(dataset)} entries.")
     except Exception as e:
         logger.error(f"Error loading dataset: {e}")
         raise HTTPException(status_code=500, detail="Failed to load dataset")
 
-# Create FAISS index with memory-efficient settings
-def create_faiss_index(embeddings: np.ndarray) -> faiss.IndexIVFFlat:
+def create_faiss_index(embeddings: np.ndarray) -> faiss.IndexFlatL2:
     d = embeddings.shape[1]
-    quantizer = faiss.IndexFlatL2(d)
-    index = faiss.IndexIVFFlat(quantizer, d, 100)  # 100 clusters
-    index.train(embeddings)
+    index = faiss.IndexFlatL2(d)
     index.add(embeddings)
     return index
 
-# Initialize model, dataset, and index on startup
 @app.on_event("startup")
-async def startup_event():
-    await load_model()
-    await load_translation_dataset()
+def startup_event():
+    load_model()
+    load_translation_dataset()
     global index
     if dataset and model:
         embeddings = np.array(dataset['embedding'], dtype=np.float32)
-        
-        # Ensure embeddings have the correct shape
-        d = embeddings.shape[1]
-        print(f"Embedding dimension: {d}")
-
+        print(f"Embedding dimension: {embeddings.shape[1]}")
         index = create_faiss_index(embeddings)
         logger.info("FAISS index created successfully.")
 
@@ -101,7 +78,6 @@ class SearchRequest(BaseModel):
     query: str
     search_language: str  # "en" or "bj"
 
-# Search endpoint
 @app.post("/search")
 async def search(request: SearchRequest) -> Dict:
     try:
@@ -124,7 +100,7 @@ async def search(request: SearchRequest) -> Dict:
         ]
 
         # Use the model to encode the query
-        query_embedding = model([query]).numpy()
+        query_embedding = model.encode([query], convert_to_numpy=True)
         query_embedding = normalize(query_embedding, norm='l2', axis=1)
         similarities, indices = index.search(query_embedding, 10)
         
@@ -151,9 +127,6 @@ async def search(request: SearchRequest) -> Dict:
         logger.error(f"Search error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Search error")
 
-# Run the application
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, access_log=False)
-
-    
