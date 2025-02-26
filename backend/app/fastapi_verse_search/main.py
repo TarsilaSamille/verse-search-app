@@ -3,7 +3,7 @@ import logging
 import numpy as np
 import faiss
 import torch
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sklearn.preprocessing import normalize
@@ -12,6 +12,7 @@ import uvicorn
 from dotenv import load_dotenv
 from datasets import load_dataset
 from sentence_transformers import SentenceTransformer
+import asyncio
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -46,10 +47,10 @@ def load_model():
         logger.error(f"Error loading model: {e}")
         raise HTTPException(status_code=500, detail="Failed to load model")
 
-def load_translation_dataset() -> List[Dict]:
+async def load_translation_dataset() -> List[Dict]:
     global dataset
     try:
-        print("Loading dataset from Hugging Face...")
+        logger.info("Loading dataset from Hugging Face...")
         dataset = load_dataset('tarsssss/translation-bj-en', split='train')
         logger.info(f"Dataset loaded with {len(dataset)} entries.")
     except Exception as e:
@@ -62,18 +63,21 @@ def create_faiss_index(embeddings: np.ndarray) -> faiss.IndexFlatL2:
     index.add(embeddings)
     return index
 
-@app.on_event("startup")
-def startup_event():
-    load_model()
-    load_translation_dataset()
+async def initialize_index():
     global index
     if dataset and model:
         # Extract embeddings from the dataset
         embeddings = np.array([model.encode(entry["text"]) for entry in dataset], dtype=np.float32)
         embeddings = normalize(embeddings, norm='l2', axis=1)  # Normalize embeddings
-        print(f"Embedding dimension: {embeddings.shape[1]}")
+        logger.info(f"Embedding dimension: {embeddings.shape[1]}")
         index = create_faiss_index(embeddings)
         logger.info("FAISS index created successfully.")
+
+@app.on_event("startup")
+async def startup_event():
+    load_model()
+    await load_translation_dataset()
+    await initialize_index()
 
 # Search request model
 class SearchRequest(BaseModel):
