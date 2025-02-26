@@ -12,7 +12,7 @@ import uvicorn
 from dotenv import load_dotenv
 from datasets import load_dataset
 from sentence_transformers import SentenceTransformer
-import asyncio
+from tqdm import tqdm 
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -67,7 +67,7 @@ async def initialize_index():
     global index
     if dataset and model:
         # Extract embeddings from the dataset
-        embeddings = np.array([model.encode(entry["text"]) for entry in dataset], dtype=np.float32)
+        embeddings = np.array([model.encode(entry["text"]) for entry in tqdm(dataset, desc="Creating embeddings")], dtype=np.float32)
         embeddings = normalize(embeddings, norm='l2', axis=1)  # Normalize embeddings
         logger.info(f"Embedding dimension: {embeddings.shape[1]}")
         index = create_faiss_index(embeddings)
