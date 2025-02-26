@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Global variables for model, dataset, and index
 model = None
-dataset = []  # Inicializar como lista vazia
+dataset = []  # Initialize as empty list
 index = None
 
 def load_model():
@@ -68,7 +68,9 @@ def startup_event():
     load_translation_dataset()
     global index
     if dataset and model:
-        embeddings = np.array(dataset['embedding'], dtype=np.float32)
+        # Extract embeddings from the dataset
+        embeddings = np.array([model.encode(entry["text"]) for entry in dataset], dtype=np.float32)
+        embeddings = normalize(embeddings, norm='l2', axis=1)  # Normalize embeddings
         print(f"Embedding dimension: {embeddings.shape[1]}")
         index = create_faiss_index(embeddings)
         logger.info("FAISS index created successfully.")
@@ -101,7 +103,7 @@ async def search(request: SearchRequest) -> Dict:
 
         # Use the model to encode the query
         query_embedding = model.encode([query], convert_to_numpy=True)
-        query_embedding = normalize(query_embedding, norm='l2', axis=1)
+        query_embedding = normalize(query_embedding, norm='l2', axis=1)  # Normalize query embedding
         similarities, indices = index.search(query_embedding, 10)
         
         semantic_matches = [
