@@ -2,14 +2,14 @@ import os
 import logging
 import numpy as np
 from sentence_transformers import SentenceTransformer
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sklearn.preprocessing import normalize
 from typing import List, Dict
 import uvicorn
 from dotenv import load_dotenv
-from datasets import load_dataset, Dataset
+from datasets import load_dataset
 
 
 # Initialize FastAPI app
@@ -77,7 +77,7 @@ def search_q(query, k=5):
     # Ensure indices are within bounds
     valid_indices = [i for i in indices if i < len(dataset)]
     # Fetch the corresponding samples from the dataset
-    samples = [{"idx": i,"score": scores[i][valid_indices.index(i)], **dataset[i]} for i in valid_indices]  # Accessing samples using indices
+    samples = [{"idx": i,"score": scores[0][valid_indices.index(i)], **dataset[i]} for i in valid_indices]  # Accessing samples using indices
     return samples
 
 
